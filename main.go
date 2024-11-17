@@ -9,13 +9,13 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 3 {
+	if len(os.Args) < 2 {
 		fmt.Println("Usage: go run main.go <command> <path>")
 		return
 	}
 
-	command := os.Args[1]
-	path := os.Args[2]
+	command := os.Args[0]
+	path := os.Args[1]
 
 	switch command {
 	case "scan":
