@@ -27,7 +27,6 @@ var videoExtensions = map[string]bool{
 var videoObjects datatypes.VideoObjects
 var totalVideos int
 var mu sync.Mutex
-var wg sync.WaitGroup
 
 // checkExtension checks if the file has a video extension
 func checkExtension(filename string) bool {
@@ -177,7 +176,7 @@ func processFile(filePath string) {
 }
 
 // processDirectory scans a directory for video files
-func ProcessDirectory(directory string) {
+func ProcessDirectory(directory string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	err := filepath.Walk(directory, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -203,12 +202,12 @@ func GetTotalVideos() int {
 
 // ProcessMasterDirectory now returns a WaitGroup for synchronization
 func ProcessMasterDirectory(masterFolder string) *sync.WaitGroup {
-	var wg sync.WaitGroup
+	wg := &sync.WaitGroup{}
 
 	files, err := os.ReadDir(masterFolder)
 	if err != nil {
 		fmt.Println("Error reading master folder:", err)
-		return &wg
+		return wg
 	}
 
 	// Process files in master directory
@@ -223,11 +222,11 @@ func ProcessMasterDirectory(masterFolder string) *sync.WaitGroup {
 	for _, subdir := range files {
 		if subdir.IsDir() {
 			wg.Add(1)
-			go ProcessDirectory(filepath.Join(masterFolder, subdir.Name()))
+			go ProcessDirectory(filepath.Join(masterFolder, subdir.Name()), wg)
 		}
 	}
 
-	return &wg
+	return wg
 }
 
 // saveToJSON saves the video metadata to a JSON file
