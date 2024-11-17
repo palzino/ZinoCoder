@@ -14,8 +14,8 @@ func main() {
 		return
 	}
 
-	command := os.Args[0]
-	path := os.Args[1]
+	command := os.Args[1]
+	path := os.Args[2]
 
 	switch command {
 	case "scan":
@@ -32,7 +32,7 @@ func main() {
 		scanner.SaveToJSON("video_metadata.json")
 		fmt.Println("Metadata saved to video_metadata.json")
 
-	case "analyze":
+	case "analyse":
 		analyser.AnalyzeJSON(path)
 
 	default:
