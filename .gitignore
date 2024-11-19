@@ -7,6 +7,8 @@
 *.dll
 *.so
 *.dylib
+renamed_files.json
+video_metadata.json
 
 # Test binary, built with `go test -c`
 *.test

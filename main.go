@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/palzino/vidanalyser/internal/analyser"
 	"github.com/palzino/vidanalyser/internal/scanner"
+	"github.com/palzino/vidanalyser/internal/transcoder"
 )
 
 func main() {
@@ -19,23 +21,22 @@ func main() {
 
 	switch command {
 	case "scan":
-		// Process the directory and get WaitGroup
 		wg := scanner.ProcessMasterDirectory(path)
-
-		// Wait for all goroutines to complete
 		wg.Wait()
-
-		// Get and print total videos
 		fmt.Printf("Total video files: %d\n", scanner.GetTotalVideos())
-
-		// Save video objects to JSON file
 		scanner.SaveToJSON("video_metadata.json")
 		fmt.Println("Metadata saved to video_metadata.json")
 
 	case "analyse":
-		analyser.AnalyzeJSON(path)
+		analyser.AnalyzeJSONWithDirectoryTraversal(path)
+
+	case "transcode":
+		minSize, _ := strconv.ParseFloat(os.Args[3], 64)
+		resolution := os.Args[4]
+		maxConcurrent, _ := strconv.Atoi(os.Args[5])
+		transcoder.StartInteractiveTranscoding("video_metadata.json", minSize, resolution, maxConcurrent)
 
 	default:
-		fmt.Println("Unknown command. Use 'scan' or 'analyze'.")
+		fmt.Println("Unknown command. Use 'scan', 'analyse', or 'transcode'.")
 	}
 }
