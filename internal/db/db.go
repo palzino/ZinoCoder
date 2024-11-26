@@ -27,7 +27,7 @@ func InitDatabase(dbPath string) {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL,
 		location TEXT NOT NULL,
-		full_file_path TEXT NOT NULL,
+		full_file_path TEXT NOT NULL UNIQUE,
 		size INTEGER NOT NULL,
 		width INTEGER,
 		height INTEGER,
