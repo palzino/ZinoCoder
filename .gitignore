@@ -8,7 +8,8 @@
 *.so
 *.dylib
 renamed_files.json
-video_metadata.json
+video_metadata.json#
+*.db
 
 # Test binary, built with `go test -c`
 *.test
@@ -21,3 +22,7 @@ video_metadata.json
 
 # Go workspace file
 go.work
+.env
+cmd/*
+backups/*
+

@@ -3,7 +3,7 @@ package scanner
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/palzino/vidanalyser/internal/datatypes"
+	"github.com/palzino/vidanalyser/internal/db"
 )
 
 var videoExtensions = map[string]bool{
@@ -29,7 +30,7 @@ var totalVideos int
 var mu sync.Mutex
 
 // checkExtension checks if the file has a video extension
-func checkExtension(filename string) bool {
+func CheckExtension(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
 	return videoExtensions[ext]
 }
@@ -66,7 +67,7 @@ func getMP4Metadata(filePath string) (int, int, int, float64, int, int) {
 
 	err := cmd.Run()
 	if err != nil {
-		fmt.Println("Error running ffprobe:", err)
+		fmt.Println("Error running ffprobe:", err, "for file:", filePath)
 		return 0, 0, 0, 0.0, 0, 0
 	}
 
@@ -152,7 +153,7 @@ func parseFramerate(fps string) float64 {
 }
 
 // processFile extracts metadata from a video file and adds it to the list
-func processFile(filePath string) {
+func ProcessFile(filePath string) {
 	fileSize := getFileSize(filePath)
 	width, height, length, framerate, frames, bitrate := getVideoMetadata(filePath)
 
@@ -161,18 +162,41 @@ func processFile(filePath string) {
 	totalVideos++
 
 	obj := datatypes.VideoObject{
-		Name:         filepath.Base(filePath),
-		Location:     filepath.Dir(filePath),
-		FullFilePath: filePath,
-		Size:         int(fileSize),
-		Width:        width,
-		Height:       height,
-		Length:       length,
-		Framerate:    framerate,
-		Frames:       frames,
-		Bitrate:      bitrate,
+		Name:          filepath.Base(filePath),
+		Location:      filepath.Dir(filePath),
+		FullFilePath:  filePath,
+		Size:          int(fileSize),
+		Width:         width,
+		Height:        height,
+		Length:        length,
+		Framerate:     framerate,
+		Frames:        frames,
+		Bitrate:       bitrate,
+		FileExtension: filepath.Ext(filePath),
 	}
-	videoObjects.Object = append(videoObjects.Object, obj)
+	// Check if the file existss in the database
+	existingVideo, err := db.QueryVideoByPath(filePath)
+	if err != nil && err != sql.ErrNoRows {
+		fmt.Printf("Error querying video from database: %s\n", err)
+		return
+	}
+
+	// If the file exists and the size matches, skip processing
+	if existingVideo != nil && existingVideo.Size == int(fileSize) {
+		return
+	}
+
+	// If the file exists but the size differs, update it; otherwise, insert it
+	if existingVideo != nil {
+		fmt.Printf("File exists but size differs. Updating entry: %s\n", filePath)
+		err = db.UpdateVideo(obj)
+	} else {
+		err = db.InsertVideo(obj)
+		if err != nil {
+			fmt.Printf("Error inserting video into database: %s\n", err)
+		}
+	}
+
 }
 
 // processDirectory scans a directory for video files
@@ -183,8 +207,8 @@ func ProcessDirectory(directory string, wg *sync.WaitGroup) {
 			fmt.Println("Error walking path:", err)
 			return err
 		}
-		if !info.IsDir() && checkExtension(info.Name()) {
-			processFile(path)
+		if !info.IsDir() && CheckExtension(info.Name()) {
+			ProcessFile(path)
 		}
 		return nil
 	})
@@ -212,9 +236,9 @@ func ProcessMasterDirectory(masterFolder string) *sync.WaitGroup {
 
 	// Process files in master directory
 	for _, file := range files {
-		if !file.IsDir() && checkExtension(file.Name()) {
+		if !file.IsDir() && CheckExtension(file.Name()) {
 			filePath := filepath.Join(masterFolder, file.Name())
-			processFile(filePath)
+			ProcessFile(filePath)
 		}
 	}
 
@@ -230,18 +254,3 @@ func ProcessMasterDirectory(masterFolder string) *sync.WaitGroup {
 }
 
 // saveToJSON saves the video metadata to a JSON file
-func SaveToJSON(filename string) {
-	file, err := os.Create(filename)
-	if err != nil {
-		fmt.Println("Error creating JSON file:", err)
-		return
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	err = encoder.Encode(videoObjects)
-	if err != nil {
-		fmt.Println("Error writing JSON data:", err)
-	}
-}

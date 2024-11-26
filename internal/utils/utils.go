@@ -1,11 +1,15 @@
 package utils
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/palzino/vidanalyser/internal/config"
 	"github.com/palzino/vidanalyser/internal/datatypes"
 )
 
@@ -30,28 +34,30 @@ func BuildDirectoryTree(videos datatypes.VideoObjects) map[string]interface{} {
 }
 
 // DisplayDirectoryTree shows an interactive tree for user navigation
-func DisplayDirectoryTree(tree map[string]interface{}, currentPath string, videos datatypes.VideoObjects, fileFilter func(datatypes.VideoObject) bool) (selectedDirs []string, selectedFiles []datatypes.VideoObject, recursive bool) {
+func DisplayDirectoryTree(tree map[string]interface{}, currentPath string, baseDir string, videos datatypes.VideoObjects, fileFilter func(datatypes.VideoObject) bool) (selectedDirs []string, selectedFiles []datatypes.VideoObject, recursive bool) {
 	for {
+		// Display the full current path
 		fmt.Printf("\nCurrent Path: %s\n", currentPath)
 		fmt.Println("[0] Select files in this directory only (no subdirectories)")
 		fmt.Println("[1] Select files in this directory and all subdirectories (recursive)")
 		fmt.Println("[2] Go up a level")
 		fmt.Println("[q] Quit")
 
-		// Get the subtree for the current path
-		subTree := getSubTree(tree, currentPath)
+		// Calculate the relative path for tree navigation
+		relativePath := strings.TrimPrefix(currentPath, baseDir)
+		relativePath = strings.TrimPrefix(relativePath, string(filepath.Separator)) // Remove leading slash if present
+
+		// Get the subtree for the relative path
+		subTree := getSubTree(tree, relativePath)
 		if subTree == nil {
-			fmt.Println("Error: Unable to retrieve subdirectory tree.")
+			fmt.Printf("Error: Unable to retrieve subdirectory tree for path '%s'.\n", relativePath)
 			return nil, nil, false
 		}
 
-		// List subdirectories
+		// List subdirectories at the current level
 		i := 3
 		subDirs := []string{}
 		for dir := range subTree {
-			if dir == "" {
-				continue
-			}
 			subDirs = append(subDirs, dir)
 			fmt.Printf("[%d] %s (directory)\n", i, dir)
 			i++
@@ -106,17 +112,20 @@ func DisplayDirectoryTree(tree map[string]interface{}, currentPath string, video
 
 		case 2:
 			// Go up one level
-			if filepath.Dir(currentPath) == currentPath {
+			parentPath := filepath.Dir(currentPath)
+			if parentPath == baseDir || parentPath == currentPath {
+				// Prevent going above the base directory
 				fmt.Println("Already at the base directory.")
+				currentPath = baseDir
 			} else {
-				currentPath = filepath.Dir(currentPath)
+				currentPath = parentPath // Update the current path
 			}
 
 		default:
 			// Navigate into a selected subdirectory
 			subDirIndex := choice - 3
 			if subDirIndex >= 0 && subDirIndex < len(subDirs) {
-				currentPath = filepath.Join(currentPath, subDirs[subDirIndex])
+				currentPath = filepath.Join(currentPath, subDirs[subDirIndex]) // Update the current path
 			} else {
 				fmt.Println("Invalid choice. Please try again.")
 			}
@@ -125,8 +134,8 @@ func DisplayDirectoryTree(tree map[string]interface{}, currentPath string, video
 }
 
 // getSubTree retrieves the subtree for the given path
-func getSubTree(tree map[string]interface{}, path string) map[string]interface{} {
-	parts := strings.Split(path, string(filepath.Separator))
+func getSubTree(tree map[string]interface{}, relativePath string) map[string]interface{} {
+	parts := strings.Split(relativePath, string(filepath.Separator))
 	current := tree
 	for _, part := range parts {
 		if part == "" {
@@ -134,9 +143,30 @@ func getSubTree(tree map[string]interface{}, path string) map[string]interface{}
 		}
 		subTree, exists := current[part]
 		if !exists {
+			fmt.Printf("Path part '%s' not found in tree at level: %v\n", part, current)
 			return nil
 		}
 		current = subTree.(map[string]interface{})
 	}
 	return current
+}
+func SendTelegramMessage(message string) {
+	botToken := config.GetTelegramBotToken()
+	chatID := config.GetTelegramChatID()
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
+	body := map[string]string{
+		"chat_id": chatID,
+		"text":    message,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		fmt.Printf("Error sending Telegram message: %s\n", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("Failed to send Telegram message: %s\n", resp.Status)
+	}
 }
