@@ -44,7 +44,7 @@ var spaceSavedMutex sync.Mutex
 // BuildDirectoryTree creates a nested map representing the directory structure from the video metadata.
 
 // StartInteractiveTranscoding handles the transcoding process based on user selections.
-func StartInteractiveTranscoding(minSize float64, resolution string, maxConcurrent int) {
+func StartInteractiveTranscoding() {
 	// Query all videos from the database
 	videos, err := db.QueryAllVideos()
 	if err != nil {
@@ -61,9 +61,18 @@ func StartInteractiveTranscoding(minSize float64, resolution string, maxConcurre
 	fmt.Printf("Starting from base directory: %s\n", baseDir)
 
 	// Ask user for output resolution, bitrate, and auto-delete preference
+	var resolution string
+	var maxConcurrent int
 	var outputResolution string
 	var outputBitrate int
 	var autoDelete bool
+	var minSize float64
+	fmt.Print("Enter desired input resolution (e.g., 720p,1080p,4k): ")
+	fmt.Scanln(&resolution)
+	fmt.Print("Enter desired minimum filesize for transcoding: ")
+	fmt.Scanln(&resolution)
+	fmt.Print("Enter desired concurrent transcodes: ")
+	fmt.Scanln(&maxConcurrent)
 	fmt.Print("Enter desired output resolution (e.g., 1280x720): ")
 	fmt.Scanln(&outputResolution)
 	fmt.Print("Enter desired output bitrate in kbps (e.g., 3500): ")
@@ -289,10 +298,7 @@ func TranscodeAndRenameVideo(video datatypes.VideoObject, resolution string, bit
 	renamedFilesMutex.Unlock()
 
 	// Display individual file completion and updated total space saved
-	completionMessage := fmt.Sprintf("Transcoding completed: %s -> %s\nSpace saved for this file: %.2f GB",
-		video.FullFilePath, outputPath, float64(spaceSaved)/(1024*1024*1024))
-	fmt.Println(completionMessage)
-	utils.SendTelegramMessage(completionMessage)
+
 	newObj := datatypes.TranscodedVideo{
 		OriginalVideoPath: video.FullFilePath,
 		TranscodedPath:    outputPath,
@@ -310,10 +316,7 @@ func TranscodeAndRenameVideo(video datatypes.VideoObject, resolution string, bit
 
 	// Display total space saved
 	displaySpaceSaved() // CLI notification
-	utils.SendTelegramMessage(fmt.Sprintf("Total space saved so far: %.2f GB", float64(totalSpaceSaved)/(1024*1024*1024)))
 
-	fmt.Println("Done! Transcode completed successfully.")
-	utils.SendTelegramMessage("Done! Transcode completed successfully.")
 	if autoDelete {
 		err := os.Remove(video.FullFilePath)
 		if err != nil {
@@ -321,6 +324,9 @@ func TranscodeAndRenameVideo(video datatypes.VideoObject, resolution string, bit
 		}
 		fmt.Println("file has been deleted: ", video.FullFilePath)
 	}
+	completionMessage := fmt.Sprintf("Transcoding completed: %s -> %s\nSpace saved for this file: %.2f GB",
+		video.FullFilePath, outputPath, float64(spaceSaved)/(1024*1024*1024), "Total space saved so far: %.2f GB", float64(totalSpaceSaved)/(1024*1024*1024))
+	utils.SendTelegramMessage(completionMessage)
 }
 func detectHardware() string {
 	// Check for NVIDIA GPU support

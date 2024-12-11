@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strconv"
 
 	"github.com/palzino/vidanalyser/internal/analyser"
 	"github.com/palzino/vidanalyser/internal/config"
@@ -41,14 +40,7 @@ func main() {
 		analyser.AnalyzeDatabase()
 
 	case "transcode":
-		if len(os.Args) < 5 {
-			fmt.Println("Usage: go run main.go transcode <path> <minSizeGB> <resolution> <maxConcurrent>")
-			return
-		}
-		minSize, _ := strconv.ParseFloat(os.Args[2], 64)
-		resolution := os.Args[3]
-		maxConcurrent, _ := strconv.Atoi(os.Args[4])
-		transcoder.StartInteractiveTranscoding(minSize, resolution, maxConcurrent)
+		transcoder.StartInteractiveTranscoding()
 
 	case "clean":
 		db.CleanDatabase()
