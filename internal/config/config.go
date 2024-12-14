@@ -12,12 +12,13 @@ func LoadConfig() {
 	err := godotenv.Load(".env")
 	if err != nil {
 		log.Println("No .env file found. Falling back to system environment variables.")
+		os.Create(".env")
 	}
 }
 
 // GetTelegramBotToken retrieves the Telegram bot token from the environment
 func GetTelegramBotToken() string {
-	token, exists := os.LookupEnv("TELEGRAM_BOT_TOKEN")
+	token, exists := os.LookupEnv("TELEGRAM_BOT_TOKEN=")
 	if !exists || token == "" {
 		log.Fatal("TELEGRAM_BOT_TOKEN is not set in the environment")
 	}

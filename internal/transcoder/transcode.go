@@ -44,8 +44,12 @@ var spaceSavedMutex sync.Mutex
 // BuildDirectoryTree creates a nested map representing the directory structure from the video metadata.
 
 // StartInteractiveTranscoding handles the transcoding process based on user selections.
+
+//define a list of servers here
+
 func StartInteractiveTranscoding() {
 	// Query all videos from the database
+
 	videos, err := db.QueryAllVideos()
 	if err != nil {
 		fmt.Printf("Error querying videos: %s\n", err)
@@ -70,7 +74,7 @@ func StartInteractiveTranscoding() {
 	fmt.Print("Enter desired input resolution (e.g., 720p,1080p,4k): ")
 	fmt.Scanln(&resolution)
 	fmt.Print("Enter desired minimum filesize for transcoding: ")
-	fmt.Scanln(&resolution)
+	fmt.Scanln(&minSize)
 	fmt.Print("Enter desired concurrent transcodes: ")
 	fmt.Scanln(&maxConcurrent)
 	fmt.Print("Enter desired output resolution (e.g., 1280x720): ")
@@ -93,7 +97,8 @@ func StartInteractiveTranscoding() {
 
 	// Transcoding logic
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, maxConcurrent)
+
+	sem := make(chan struct{}, maxConcurrent) //need to modify this so each servers concurrent is respected
 
 	for _, video := range videos {
 		if (IsInSelectedDirectory(video.Location, selectedDirs, recursive) || containsVideo(selectedFiles, video)) &&
@@ -103,7 +108,7 @@ func StartInteractiveTranscoding() {
 			sem <- struct{}{}
 			go func(video datatypes.VideoObject) {
 				defer wg.Done()
-				TranscodeAndRenameVideo(video, outputResolution, outputBitrate, autoDelete)
+				//lets send the video to the transcode server and await the complete response
 				<-sem
 			}(video)
 		}
