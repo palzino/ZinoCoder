@@ -47,13 +47,17 @@ func AnalyzeDatabase() {
 	var minSize float64
 	var resolution string
 	var minDuration int
+	var targetBitrate int64
 
 	fmt.Print("Enter minimum file size in GB (or 0 for all sizes): ")
 	fmt.Scanln(&minSize)
-	fmt.Print("Enter desired resolution (e.g., 1920x1080, or 'all' for all resolutions): ")
+	fmt.Print("Enter resolution to analyse (e.g., 1920x1080, or '0' for all resolutions): ")
 	fmt.Scanln(&resolution)
 	fmt.Print("Enter minimum duration in seconds (or 0 for all durations): ")
 	fmt.Scanln(&minDuration)
+
+	fmt.Print("Enter desired bitrate savings estimation: ")
+	fmt.Scanln(&targetBitrate)
 
 	directoryTree, baseDir, err := db.BuildDirectoryTreeFromDatabase()
 	if err != nil {
@@ -74,14 +78,14 @@ func AnalyzeDatabase() {
 	videos := datatypes.VideoObjects{Object: rawVideos}
 
 	// Determine if any filter has been applied
-	filterApplied := minSize > 0 || resolution != "all" || minDuration > 0
+	filterApplied := minSize > 0 || resolution != "0" || minDuration > 0
 
 	// Define a filter function based on user input
 	fileFilter := func(video datatypes.VideoObject) bool {
 		if minSize > 0 && float64(video.Size)/(1024*1024*1024) < minSize {
 			return false
 		}
-		if resolution != "all" {
+		if resolution != "0" {
 			res := fmt.Sprintf("%dx%d", video.Width, video.Height)
 			if res != resolution {
 				return false
@@ -105,7 +109,7 @@ func AnalyzeDatabase() {
 		}
 
 		// Perform analysis on selected files
-		analyzeSelectedFilesFromDatabase(selectedDirs, selectedFiles, recursive)
+		analyzeSelectedFilesFromDatabase(selectedDirs, selectedFiles, recursive, targetBitrate)
 
 		// Option to transcode
 		fmt.Print("Would you like to transcode the analyzed files? (yes/no): ")
@@ -143,7 +147,7 @@ func AnalyzeDatabase() {
 	}
 }
 
-func analyzeSelectedFilesFromDatabase(selectedDirs []string, selectedFiles []datatypes.VideoObject, recursive bool) {
+func analyzeSelectedFilesFromDatabase(selectedDirs []string, selectedFiles []datatypes.VideoObject, recursive bool, targetBitrate int64) {
 	totalLength := 0
 	totalSize := int64(0)
 	totalEstimatedSize := int64(0)
@@ -161,8 +165,8 @@ func analyzeSelectedFilesFromDatabase(selectedDirs []string, selectedFiles []dat
 			totalSize += int64(video.Size)
 
 			// Estimate transcoded size for 720p, 1.5 Mbps video + 160 kbps audio
-			const videoBitrate = int64(1.5 * 1024 * 1024 / 8) // 1.5 Mbps to bytes per second
-			const audioBitrate = int64(160 * 1024 / 8)        // 160 kbps to bytes per second
+			videoBitrate := int64(targetBitrate * 1024 * 1024 / 8) // 1.5 Mbps to bytes per second
+			const audioBitrate = int64(160 * 1024 / 8)             // 160 kbps to bytes per second
 			totalBitrate := videoBitrate + audioBitrate
 			estimatedSize := int64(video.Length) * totalBitrate
 
