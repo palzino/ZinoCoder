@@ -26,3 +26,4 @@ go.work
 cmd/*
 backups/*
 
+install.bash
