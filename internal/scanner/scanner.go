@@ -190,6 +190,9 @@ func ProcessFile(filePath string) {
 	if existingVideo != nil {
 		fmt.Printf("File exists but size differs. Updating entry: %s\n", filePath)
 		err = db.UpdateVideo(obj)
+		if err != nil {
+			fmt.Printf("Error updating video in database: %s\n", err)
+		}
 	} else {
 		err = db.InsertVideo(obj)
 		if err != nil {
@@ -252,5 +255,3 @@ func ProcessMasterDirectory(masterFolder string) *sync.WaitGroup {
 
 	return wg
 }
-
-// saveToJSON saves the video metadata to a JSON file

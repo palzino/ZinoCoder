@@ -153,6 +153,10 @@ func getSubTree(tree map[string]interface{}, relativePath string) map[string]int
 func SendTelegramMessage(message string) {
 	botToken := config.GetTelegramBotToken()
 	chatID := config.GetTelegramChatID()
+	if botToken == "" || chatID == "" {
+		fmt.Println("Telegram bot token or chat ID not set. Skipping message sending.")
+		return
+	}
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
 	body := map[string]string{
 		"chat_id": chatID,
