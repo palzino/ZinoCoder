@@ -40,7 +40,19 @@ func main() {
 		analyser.AnalyzeDatabase()
 
 	case "transcode":
-		transcoder.StartInteractiveTranscoding()
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: go run main.go transcode [background|foreground]")
+			return
+		}
+		mode := os.Args[2]
+		switch mode {
+		case "background":
+			transcoder.StartBackgroundTranscoding()
+		case "foreground":
+			transcoder.StartInteractiveTranscoding(false)
+		default:
+			fmt.Println("Invalid mode. Use 'background' or 'foreground'")
+		}
 
 	case "clean":
 		db.CleanDatabase()

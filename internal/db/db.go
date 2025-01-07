@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/palzino/vidanalyser/internal/datatypes"
+	"github.com/palzino/vidanalyser/internal/tree"
 )
 
 var DB *sql.DB
@@ -283,47 +284,26 @@ func CleanDatabase() error {
 	return nil
 }
 
-func BuildDirectoryTreeFromDatabase() (map[string]interface{}, string, error) {
-	// Query all videos from the database
+func BuildDirectoryTree() (*tree.DirectoryNode, error) {
 	videos, err := QueryAllVideos()
 	if err != nil {
-		return nil, "", fmt.Errorf("error querying videos for directory tree: %w", err)
+		return nil, fmt.Errorf("error querying videos: %w", err)
 	}
 
 	if len(videos) == 0 {
-		return nil, "/", nil // No videos, default to root
+		return tree.NewDirectoryNode("/"), nil
 	}
 
-	// Determine the common base directory
+	// Find common base directory
 	baseDir := findCommonPrefix(videos)
-	fmt.Printf("Common base directory: %s\n", baseDir)
+	root := tree.NewDirectoryNode(baseDir)
 
-	// Initialize the tree structure
-	tree := make(map[string]interface{})
-
-	// Build the directory tree
+	// Add all videos to the tree
 	for _, video := range videos {
-		dirPath := filepath.Clean(filepath.Dir(video.FullFilePath))
-		relativePath := strings.TrimPrefix(dirPath, baseDir)
-		relativePath = strings.TrimPrefix(relativePath, string(filepath.Separator)) // Remove leading slash if present
-
-		// Split the relative path into parts
-		parts := strings.Split(relativePath, string(filepath.Separator))
-		current := tree
-
-		// Traverse or create nodes for each part
-		for _, part := range parts {
-			if part == "" {
-				continue
-			}
-			if _, exists := current[part]; !exists {
-				current[part] = make(map[string]interface{})
-			}
-			current = current[part].(map[string]interface{})
-		}
+		root.AddVideo(video)
 	}
 
-	return tree, baseDir, nil
+	return root, nil
 }
 
 // findCommonPrefix finds the common prefix between two paths
