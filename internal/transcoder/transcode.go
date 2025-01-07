@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/palzino/vidanalyser/internal/scanner"
 
 	"github.com/palzino/vidanalyser/internal/db"
+	"github.com/palzino/vidanalyser/internal/tree"
 	"github.com/palzino/vidanalyser/internal/utils"
 )
 
@@ -49,29 +51,6 @@ var spaceSavedMutex sync.Mutex
 //define a list of servers here
 
 func StartInteractiveTranscoding(background bool) {
-	if background {
-		// Create a log file for output
-		logFile, err := os.OpenFile("transcode.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			fmt.Printf("Error creating log file: %s\n", err)
-			return
-		}
-		defer logFile.Close()
-
-		// Redirect stdout and stderr to the log file
-		log.SetOutput(logFile)
-		os.Stdout = logFile
-		os.Stderr = logFile
-
-		// Detach from the terminal
-		if os.Getppid() != 1 {
-			args := append([]string{os.Args[0]}, os.Args[1:]...)
-			cmd := exec.Command("/usr/bin/nohup", args...)
-			cmd.Start()
-			fmt.Println("Transcoding process started in background. Check transcode.log for progress.")
-			os.Exit(0)
-		}
-	}
 
 	// Query all videos from the database
 	videos, err := db.QueryAllVideos()
@@ -125,6 +104,30 @@ func StartInteractiveTranscoding(background bool) {
 		return
 	}
 	fmt.Printf("Found %d files to transcode\n", len(selectedFiles))
+
+	if background {
+		// Create a log file for output
+		logFile, err := os.OpenFile("transcode.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Printf("Error creating log file: %s\n", err)
+			return
+		}
+		defer logFile.Close()
+
+		// Redirect stdout and stderr to the log file
+		log.SetOutput(logFile)
+		os.Stdout = logFile
+		os.Stderr = logFile
+
+		// Detach from the terminal
+		if os.Getppid() != 1 {
+			args := append([]string{os.Args[0]}, os.Args[1:]...)
+			cmd := exec.Command("/usr/bin/nohup", args...)
+			cmd.Start()
+			fmt.Println("Transcoding process started in background. Check transcode.log for progress.")
+			os.Exit(0)
+		}
+	}
 
 	// Start progress display
 	go DisplayProgress(background)
@@ -564,4 +567,74 @@ func NonInteractiveTranscodingByDirectory(
 
 func StartBackgroundTranscoding() {
 	StartInteractiveTranscoding(true)
+}
+
+func displayDirectoryAndGetSelection(tree *tree.DirectoryNode) (*tree.DirectoryNode, bool) {
+	fmt.Printf("\nCurrent directory: %s\n", tree.Path)
+	fmt.Println("[1] Select files in this directory only")
+	fmt.Println("[2] Select files in this directory and subdirectories")
+	if tree.Path != "/" {
+		fmt.Println("[3] Go up one directory")
+	}
+
+	// List subdirectories with ordered indices
+	subdirs := make([]string, 0, len(tree.Children))
+	for name := range tree.Children {
+		subdirs = append(subdirs, name)
+	}
+	sort.Strings(subdirs)
+
+	var startIdx int
+	if tree.Path == "/" {
+		startIdx = 3
+	} else {
+		startIdx = 4
+	}
+
+	for i, name := range subdirs {
+		fmt.Printf("[%d] Enter %s/\n", i+startIdx, name)
+	}
+	fmt.Println("[q] Quit")
+
+	var input string
+	fmt.Print("Enter choice: ")
+	fmt.Scanln(&input)
+
+	if input == "q" {
+		return nil, false
+	}
+	if input == "1" {
+		return tree, false
+	}
+	if input == "2" {
+		return tree, true
+	}
+	if input == "3" && tree.Path != "/" {
+		parentPath := filepath.Dir(tree.Path)
+		parentNode, err := db.BuildDirectoryTree()
+		if err != nil {
+			fmt.Printf("Error getting parent directory: %s\n", err)
+			return tree, false
+		}
+		if parent := parentNode.GetSubDirectory(parentPath); parent != nil {
+			return displayDirectoryAndGetSelection(parent)
+		}
+	}
+
+	// Handle subdirectory selection
+	choice, err := strconv.Atoi(input)
+	if err == nil {
+		var idx int
+		if tree.Path == "/" {
+			idx = choice - 3
+		} else {
+			idx = choice - 4
+		}
+		if idx >= 0 && idx < len(subdirs) {
+			childName := subdirs[idx]
+			return displayDirectoryAndGetSelection(tree.Children[childName])
+		}
+	}
+
+	return tree, false
 }
