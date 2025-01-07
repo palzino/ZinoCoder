@@ -9,6 +9,7 @@ import (
 
 	"github.com/palzino/vidanalyser/internal/datatypes"
 	"github.com/palzino/vidanalyser/internal/db"
+	"github.com/palzino/vidanalyser/internal/tree"
 	"github.com/palzino/vidanalyser/internal/utils"
 )
 
@@ -99,6 +100,29 @@ func startCallbackServer(serverSemaphores map[string]chan struct{}, numVids *int
 	}()
 }
 
+func displayDirectoryAndGetSelection(tree *tree.DirectoryNode) (*tree.DirectoryNode, bool) {
+	fmt.Printf("\nCurrent directory: %s\n", tree.Path)
+	fmt.Println("[1] Select files in this directory only")
+	fmt.Println("[2] Select files in this directory and subdirectories")
+	fmt.Println("[q] Quit")
+
+	var input string
+	fmt.Print("Enter choice: ")
+	fmt.Scanln(&input)
+
+	if input == "q" {
+		return nil, false
+	}
+	if input == "1" {
+		return tree, false
+	}
+	if input == "2" {
+		return tree, true
+	}
+
+	return tree, false
+}
+
 func StartAPITranscoding() {
 	Servers := Servers{
 		servers: []Server{
@@ -115,12 +139,12 @@ func StartAPITranscoding() {
 	}
 
 	// Build the directory tree from the database
-	directoryTree, baseDir, err := db.BuildDirectoryTreeFromDatabase()
+	directoryTree, err := db.BuildDirectoryTree()
 	if err != nil {
 		fmt.Printf("Error building directory tree: %s\n", err)
 		return
 	}
-	fmt.Printf("Starting from base directory: %s\n", baseDir)
+	fmt.Printf("Starting from base directory: %s\n", directoryTree.Path)
 
 	// Ask user for input preferences
 	var resolution string
@@ -146,7 +170,11 @@ func StartAPITranscoding() {
 	}
 
 	// Navigate the directory tree and select files for transcoding
-	selectedDirs, selectedFiles, recursive := utils.DisplayDirectoryTree(directoryTree, baseDir, baseDir, datatypes.VideoObjects{Object: videos}, fileFilter)
+	selectedNode, recursive := displayDirectoryAndGetSelection(directoryTree)
+	if selectedNode == nil {
+		return
+	}
+	selectedFiles := selectedNode.FilterFiles(fileFilter, recursive)
 
 	// Prepare server-specific semaphores
 	serverSemaphores := make(map[string]chan struct{})
@@ -168,9 +196,7 @@ func StartAPITranscoding() {
 	utils.SendTelegramMessage(fmt.Sprintf("Starting transcoding of %d videos", numVids))
 
 	for _, video := range videos {
-		if (IsInSelectedDirectory(video.Location, selectedDirs, recursive) || containsVideo(selectedFiles, video)) &&
-			fileFilter(video) {
-
+		if containsVideo(selectedFiles, video) && fileFilter(video) {
 			// Find an available server
 			for _, server := range Servers.servers {
 				select {

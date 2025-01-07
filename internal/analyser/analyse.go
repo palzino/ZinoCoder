@@ -6,8 +6,7 @@ import (
 
 	"github.com/palzino/vidanalyser/internal/datatypes"
 	"github.com/palzino/vidanalyser/internal/db"
-	"github.com/palzino/vidanalyser/internal/transcoder"
-	"github.com/palzino/vidanalyser/internal/utils"
+	"github.com/palzino/vidanalyser/internal/tree"
 )
 
 // formatTime converts total seconds into days, hours, minutes, and seconds
@@ -43,111 +42,77 @@ func shouldTranscode(width, height int, targetResolution string) bool {
 }
 
 func AnalyzeDatabase() {
-	// Ask the user for filtering options
-	var minSize float64
-	var resolution string
-	var minDuration int
-	var targetBitrate int64
+	// Get user input for filters
+	filters := getUserFilters()
 
-	fmt.Print("Enter minimum file size in GB (or 0 for all sizes): ")
-	fmt.Scanln(&minSize)
-	fmt.Print("Enter resolution to analyse (e.g., 1920x1080, or '0' for all resolutions): ")
-	fmt.Scanln(&resolution)
-	fmt.Print("Enter minimum duration in seconds (or 0 for all durations): ")
-	fmt.Scanln(&minDuration)
-
-	fmt.Print("Enter desired bitrate savings estimation: ")
-	fmt.Scanln(&targetBitrate)
-
-	directoryTree, baseDir, err := db.BuildDirectoryTreeFromDatabase()
+	// Build directory tree
+	directoryTree, err := db.BuildDirectoryTree()
 	if err != nil {
 		fmt.Printf("Error building directory tree: %s\n", err)
 		return
 	}
-	fmt.Printf("Starting from base directory: %s\n", baseDir)
 
-	currentPath := baseDir
-
-	rawVideos, err := db.QueryAllVideos()
-	if err != nil {
-		fmt.Printf("Error querying all videos: %s\n", err)
-		return
-	}
-
-	// Wrap the raw videos into the VideoObjects struct
-	videos := datatypes.VideoObjects{Object: rawVideos}
-
-	// Determine if any filter has been applied
-	filterApplied := minSize > 0 || resolution != "0" || minDuration > 0
-
-	// Define a filter function based on user input
-	fileFilter := func(video datatypes.VideoObject) bool {
-		if minSize > 0 && float64(video.Size)/(1024*1024*1024) < minSize {
-			return false
-		}
-		if resolution != "0" {
-			res := fmt.Sprintf("%dx%d", video.Width, video.Height)
-			if res != resolution {
-				return false
-			}
-		}
-		if minDuration > 0 && video.Length < minDuration {
-			return false
-		}
-		return true
-	}
-
-	// Traverse directories and select files for analysis
+	// Create filter function
+	fileFilter := createFileFilter(filters)
 
 	for {
-		selectedDirs, selectedFiles, recursive := utils.DisplayDirectoryTree(directoryTree, currentPath, baseDir, videos, fileFilter)
-
-		// If the user chose to quit
-		if selectedDirs == nil && selectedFiles == nil && !recursive {
-			fmt.Println("Exiting analysis.")
+		// Display current directory and get user selection
+		selectedNode, recursive := displayDirectoryAndGetSelection(directoryTree)
+		if selectedNode == nil {
 			return
 		}
 
-		// Perform analysis on selected files
-		analyzeSelectedFilesFromDatabase(selectedDirs, selectedFiles, recursive, targetBitrate)
+		// Get filtered files
+		selectedFiles := selectedNode.FilterFiles(fileFilter, recursive)
 
-		// Option to transcode
-		fmt.Print("Would you like to transcode the analyzed files? (yes/no): ")
-		var choice string
-		fmt.Scanln(&choice)
+		// Analyze selected files
+		analyzeFiles(selectedFiles, filters.targetBitrate)
 
-		if choice == "yes" {
-			var transcodeResolution string
-			var transcodeBitrate int
-			var autoDelete bool
-			fmt.Print("Enter desired resolution for transcoding (e.g., 1280x720): ")
-			fmt.Scanln(&transcodeResolution)
-			fmt.Print("Enter desired bitrate in kbps (e.g., 3500): ")
-			fmt.Scanln(&transcodeBitrate)
-			fmt.Println("Auto delete? true/false")
-			fmt.Scanln(&autoDelete)
-
-			transcoder.StartTranscodingFromAnalysis(videos, selectedDirs, selectedFiles, recursive, transcodeResolution, transcodeBitrate, autoDelete)
+		if !promptContinue() {
 			break
-		} else if choice == "no" {
-			if !filterApplied {
-				fmt.Print("Would you like to perform another analysis? (yes/no): ")
-				fmt.Scanln(&choice)
-				if choice != "yes" {
-					fmt.Println("Exiting analysis.")
-					return
-				}
-			} else {
-				fmt.Println("Exiting analysis.")
-				return
-			}
-		} else {
-			fmt.Println("Invalid input. Please enter 'yes' or 'no'.")
 		}
 	}
 }
 
-func analyzeSelectedFilesFromDatabase(selectedDirs []string, selectedFiles []datatypes.VideoObject, recursive bool, targetBitrate int64) {
+type AnalysisFilters struct {
+	minSize       float64
+	resolution    string
+	minDuration   int
+	targetBitrate int64
+}
+
+func getUserFilters() AnalysisFilters {
+	var f AnalysisFilters
+	fmt.Print("Enter minimum file size in GB (or 0 for all sizes): ")
+	fmt.Scanln(&f.minSize)
+	fmt.Print("Enter resolution to analyse (e.g., 1920x1080, or '0' for all resolutions): ")
+	fmt.Scanln(&f.resolution)
+	fmt.Print("Enter minimum duration in seconds (or 0 for all durations): ")
+	fmt.Scanln(&f.minDuration)
+	fmt.Print("Enter desired bitrate savings estimation: ")
+	fmt.Scanln(&f.targetBitrate)
+	return f
+}
+
+func createFileFilter(f AnalysisFilters) func(datatypes.VideoObject) bool {
+	return func(video datatypes.VideoObject) bool {
+		if f.minSize > 0 && float64(video.Size)/(1024*1024*1024) < f.minSize {
+			return false
+		}
+		if f.resolution != "0" {
+			res := fmt.Sprintf("%dx%d", video.Width, video.Height)
+			if res != f.resolution {
+				return false
+			}
+		}
+		if f.minDuration > 0 && video.Length < f.minDuration {
+			return false
+		}
+		return true
+	}
+}
+
+func analyzeFiles(selectedFiles []datatypes.VideoObject, targetBitrate int64) {
 	totalLength := 0
 	totalSize := int64(0)
 	totalEstimatedSize := int64(0)
@@ -160,7 +125,7 @@ func analyzeSelectedFilesFromDatabase(selectedDirs []string, selectedFiles []dat
 	}
 
 	for _, video := range videos {
-		if db.IsInSelectedDirectory(video.Location, selectedDirs, recursive) || containsVideo(selectedFiles, video) {
+		if containsVideo(selectedFiles, video) {
 			totalLength += video.Length
 			totalSize += int64(video.Size)
 
@@ -193,4 +158,34 @@ func containsVideo(selectedFiles []datatypes.VideoObject, video datatypes.VideoO
 		}
 	}
 	return false
+}
+
+func promptContinue() bool {
+	var response string
+	fmt.Print("Would you like to analyze another directory? (yes/no): ")
+	fmt.Scanln(&response)
+	return strings.ToLower(response) == "yes"
+}
+
+func displayDirectoryAndGetSelection(tree *tree.DirectoryNode) (*tree.DirectoryNode, bool) {
+	fmt.Printf("\nCurrent directory: %s\n", tree.Path)
+	fmt.Println("[1] Select files in this directory only")
+	fmt.Println("[2] Select files in this directory and subdirectories")
+	fmt.Println("[q] Quit")
+
+	var input string
+	fmt.Print("Enter choice: ")
+	fmt.Scanln(&input)
+
+	if input == "q" {
+		return nil, false
+	}
+	if input == "1" {
+		return tree, false
+	}
+	if input == "2" {
+		return tree, true
+	}
+
+	return tree, false
 }

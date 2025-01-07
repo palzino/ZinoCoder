@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,22 +48,45 @@ var spaceSavedMutex sync.Mutex
 
 //define a list of servers here
 
-func StartInteractiveTranscoding() {
-	// Query all videos from the database
+func StartInteractiveTranscoding(background bool) {
+	if background {
+		// Create a log file for output
+		logFile, err := os.OpenFile("transcode.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Printf("Error creating log file: %s\n", err)
+			return
+		}
+		defer logFile.Close()
 
+		// Redirect stdout and stderr to the log file
+		log.SetOutput(logFile)
+		os.Stdout = logFile
+		os.Stderr = logFile
+
+		// Detach from the terminal
+		if os.Getppid() != 1 {
+			args := append([]string{os.Args[0]}, os.Args[1:]...)
+			cmd := exec.Command("/usr/bin/nohup", args...)
+			cmd.Start()
+			fmt.Println("Transcoding process started in background. Check transcode.log for progress.")
+			os.Exit(0)
+		}
+	}
+
+	// Query all videos from the database
 	videos, err := db.QueryAllVideos()
 	if err != nil {
-		fmt.Printf("Error querying videos: %s\n", err)
+		log.Printf("Error querying videos: %s\n", err)
 		return
 	}
 
 	// Build the directory tree from the database
-	directoryTree, baseDir, err := db.BuildDirectoryTreeFromDatabase()
+	directoryTree, err := db.BuildDirectoryTree()
 	if err != nil {
 		fmt.Printf("Error building directory tree: %s\n", err)
 		return
 	}
-	fmt.Printf("Starting from base directory: %s\n", baseDir)
+	fmt.Printf("Starting from base directory: %s\n", directoryTree.Path)
 
 	// Ask user for output resolution, bitrate, and auto-delete preference
 	var resolution string
@@ -90,25 +114,32 @@ func StartInteractiveTranscoding() {
 	}
 
 	// Navigate the directory tree and select files for transcoding
-	selectedDirs, selectedFiles, recursive := utils.DisplayDirectoryTree(directoryTree, baseDir, baseDir, datatypes.VideoObjects{Object: videos}, fileFilter)
+	selectedNode, recursive := displayDirectoryAndGetSelection(directoryTree)
+	if selectedNode == nil {
+		return
+	}
+	selectedFiles := selectedNode.FilterFiles(fileFilter, recursive)
+
+	if len(selectedFiles) == 0 {
+		fmt.Println("No files found matching the criteria")
+		return
+	}
+	fmt.Printf("Found %d files to transcode\n", len(selectedFiles))
 
 	// Start progress display
-	go DisplayProgress()
+	go DisplayProgress(background)
 
 	// Transcoding logic
 	var wg sync.WaitGroup
-
-	sem := make(chan struct{}, maxConcurrent) //need to modify this so each servers concurrent is respected
+	sem := make(chan struct{}, maxConcurrent)
 
 	for _, video := range videos {
-		if (IsInSelectedDirectory(video.Location, selectedDirs, recursive) || containsVideo(selectedFiles, video)) &&
-			fileFilter(video) {
-
+		if containsVideo(selectedFiles, video) && fileFilter(video) {
 			wg.Add(1)
 			sem <- struct{}{}
 			go func(video datatypes.VideoObject) {
 				defer wg.Done()
-				//lets send the video to the transcode server and await the complete response
+				TranscodeAndRenameVideo(video, outputResolution, outputBitrate, autoDelete)
 				<-sem
 			}(video)
 		}
@@ -117,6 +148,7 @@ func StartInteractiveTranscoding() {
 	wg.Wait()
 	fmt.Println("All selected videos have been transcoded.")
 }
+
 func FindCommonBaseDir(videos datatypes.VideoObjects) string {
 	if len(videos.Object) == 0 {
 		return "/"
@@ -139,6 +171,7 @@ func FindCommonBaseDir(videos datatypes.VideoObjects) string {
 
 	return commonBaseDir
 }
+
 func containsVideo(selectedFiles []datatypes.VideoObject, video datatypes.VideoObject) bool {
 	for _, v := range selectedFiles {
 		if v.FullFilePath == video.FullFilePath {
@@ -333,6 +366,7 @@ func TranscodeAndRenameVideo(video datatypes.VideoObject, resolution string, bit
 		video.FullFilePath, outputPath, float64(spaceSaved)/(1024*1024*1024), "Total space saved so far: %.2f GB", float64(totalSpaceSaved)/(1024*1024*1024))
 	utils.SendTelegramMessage(completionMessage)
 }
+
 func detectHardware() string {
 	// Check for NVIDIA GPU support
 	cmd := exec.Command("nvidia-smi")
@@ -384,18 +418,29 @@ func parseProgress(stderr io.ReadCloser, totalDuration int, startTime time.Time,
 	}
 }
 
-func DisplayProgress() {
+func DisplayProgress(background bool) {
 	for {
 		time.Sleep(1 * time.Second)
 		progressMutex.Lock()
-		fmt.Print("\033[H\033[2J") // Clear the terminal
-		fmt.Println("Current Transcoding Progress:")
 
-		// Iterate over progressKeys to maintain a fixed order
-		for _, key := range progressKeys {
-			if progress, exists := progressMap[key]; exists {
-				fmt.Printf("%s | Progress: %.2f%% | Elapsed: %s | Remaining: %s\n",
-					key, progress.Percentage, progress.Elapsed.Truncate(time.Second), progress.Remaining.Truncate(time.Second))
+		if background {
+			// Write progress to log
+			log.Println("\n--- Current Transcoding Progress ---")
+			for _, key := range progressKeys {
+				if progress, exists := progressMap[key]; exists {
+					log.Printf("%s | Progress: %.2f%% | Elapsed: %s | Remaining: %s\n",
+						key, progress.Percentage, progress.Elapsed.Truncate(time.Second), progress.Remaining.Truncate(time.Second))
+				}
+			}
+		} else {
+			// Clear terminal and show progress
+			fmt.Print("\033[H\033[2J")
+			fmt.Println("Current Transcoding Progress:")
+			for _, key := range progressKeys {
+				if progress, exists := progressMap[key]; exists {
+					fmt.Printf("%s | Progress: %.2f%% | Elapsed: %s | Remaining: %s\n",
+						key, progress.Percentage, progress.Elapsed.Truncate(time.Second), progress.Remaining.Truncate(time.Second))
+				}
 			}
 		}
 
@@ -432,6 +477,7 @@ func displaySpaceSaved() {
 	savedGB := float64(totalSpaceSaved) / (1024 * 1024 * 1024)
 	fmt.Printf("Total space saved so far: %.2f GB\n", savedGB)
 }
+
 func StartTranscodingFromAnalysis(videos datatypes.VideoObjects, selectedDirs []string, selectedFiles []datatypes.VideoObject, recursive bool, resolution string, bitrate int, autoDelete bool) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 3) // Example: max concurrent jobs = 3
@@ -514,4 +560,8 @@ func NonInteractiveTranscodingByDirectory(
 
 	fmt.Println("Non-interactive transcoding job has started. Logs and progress will be saved.")
 	return nil
+}
+
+func StartBackgroundTranscoding() {
+	StartInteractiveTranscoding(true)
 }
