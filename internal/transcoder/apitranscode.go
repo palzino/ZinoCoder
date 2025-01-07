@@ -9,7 +9,6 @@ import (
 
 	"github.com/palzino/vidanalyser/internal/datatypes"
 	"github.com/palzino/vidanalyser/internal/db"
-	"github.com/palzino/vidanalyser/internal/tree"
 	"github.com/palzino/vidanalyser/internal/utils"
 )
 
@@ -98,29 +97,6 @@ func startCallbackServer(serverSemaphores map[string]chan struct{}, numVids *int
 			fmt.Printf("Error starting callback server: %v\n", err)
 		}
 	}()
-}
-
-func displayDirectoryAndGetSelection(tree *tree.DirectoryNode) (*tree.DirectoryNode, bool) {
-	fmt.Printf("\nCurrent directory: %s\n", tree.Path)
-	fmt.Println("[1] Select files in this directory only")
-	fmt.Println("[2] Select files in this directory and subdirectories")
-	fmt.Println("[q] Quit")
-
-	var input string
-	fmt.Print("Enter choice: ")
-	fmt.Scanln(&input)
-
-	if input == "q" {
-		return nil, false
-	}
-	if input == "1" {
-		return tree, false
-	}
-	if input == "2" {
-		return tree, true
-	}
-
-	return tree, false
 }
 
 func StartAPITranscoding() {
