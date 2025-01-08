@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +23,53 @@ import (
 	"github.com/palzino/vidanalyser/internal/db"
 	"github.com/palzino/vidanalyser/internal/tree"
 	"github.com/palzino/vidanalyser/internal/utils"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+var (
+	transcodingProgress = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "transcoding_progress_percentage",
+			Help: "Current progress of transcoding in percentage.",
+		},
+		[]string{"file"},
+	)
+	transcodingDuration = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "transcoding_duration_seconds",
+			Help: "Elapsed time of transcoding in seconds.",
+		},
+		[]string{"file"},
+	)
+	transcodingRemaining = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "transcoding_remaining_seconds",
+			Help: "Estimated remaining time of transcoding in seconds.",
+		},
+		[]string{"file"},
+	)
+	transcodingQueueSize = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "transcoding_queue_size",
+			Help: "Number of items left in the transcode queue.",
+		},
+	)
+	totalTranscodingTime = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "total_transcoding_time_seconds",
+			Help: "Total time elapsed transcoding in seconds.",
+		},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(transcodingProgress)
+	prometheus.MustRegister(transcodingDuration)
+	prometheus.MustRegister(transcodingRemaining)
+	prometheus.MustRegister(transcodingQueueSize)
+	prometheus.MustRegister(totalTranscodingTime)
+}
 
 type RenamedFile struct {
 	OriginalName string `json:"original_name"`
@@ -40,7 +87,6 @@ var progressMap = make(map[string]*Progress)
 var progressKeys []string
 var progressMutex sync.Mutex
 
-var renamedFiles []RenamedFile
 var renamedFilesMutex sync.Mutex
 var totalSpaceSaved int64
 var spaceSavedMutex sync.Mutex
@@ -60,6 +106,7 @@ type TranscodeConfig struct {
 //define a list of servers here
 
 func StartInteractiveTranscoding(background bool) {
+	startPrometheusEndpoint()
 	// If we're already the background process, set up logging first
 	if os.Getenv("BACKGROUND_PROCESS") == "1" {
 		logFile, err := os.OpenFile("transcode.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -144,6 +191,13 @@ func StartInteractiveTranscoding(background bool) {
 	startTranscoding(selectedFiles, outputResolution, outputBitrate, maxConcurrent, autoDelete)
 }
 
+func startPrometheusEndpoint() {
+	http.Handle("/metrics", promhttp.Handler())
+	go func() {
+		log.Fatal(http.ListenAndServe(":2112", nil))
+	}()
+}
+
 func startTranscoding(selectedFiles []datatypes.VideoObject, outputResolution string, outputBitrate int, maxConcurrent int, autoDelete bool) {
 	// Start progress display
 	go DisplayProgress(false)
@@ -152,6 +206,7 @@ func startTranscoding(selectedFiles []datatypes.VideoObject, outputResolution st
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxConcurrent)
 
+	transcodingQueueSize.Set(float64(len(selectedFiles)))
 	log.Printf("Starting transcoding of %d files\n", len(selectedFiles))
 	for _, video := range selectedFiles {
 		log.Printf("Queueing %s for transcoding\n", video.FullFilePath)
@@ -159,7 +214,11 @@ func startTranscoding(selectedFiles []datatypes.VideoObject, outputResolution st
 		sem <- struct{}{}
 		go func(video datatypes.VideoObject) {
 			defer wg.Done()
+			start := time.Now()
 			TranscodeAndRenameVideo(video, outputResolution, outputBitrate, autoDelete)
+			elapsed := time.Since(start).Seconds()
+			totalTranscodingTime.Add(elapsed)
+			transcodingQueueSize.Dec()
 			<-sem
 		}(video)
 	}
@@ -489,6 +548,11 @@ func parseProgress(stderr io.ReadCloser, totalDuration int, startTime time.Time,
 				Remaining:  remaining,
 			}
 			progressMutex.Unlock()
+
+			// Update Prometheus metrics
+			transcodingProgress.WithLabelValues(key).Set(progress)
+			transcodingDuration.WithLabelValues(key).Set(elapsed.Seconds())
+			transcodingRemaining.WithLabelValues(key).Set(remaining.Seconds())
 		}
 	}
 }
