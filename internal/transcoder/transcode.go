@@ -2,6 +2,7 @@ package transcoder
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -44,6 +45,14 @@ var renamedFilesMutex sync.Mutex
 var totalSpaceSaved int64
 var spaceSavedMutex sync.Mutex
 
+type TranscodeConfig struct {
+	SelectedFiles    []datatypes.VideoObject
+	OutputResolution string
+	OutputBitrate    int
+	MaxConcurrent    int
+	AutoDelete       bool
+}
+
 // BuildDirectoryTree creates a nested map representing the directory structure from the video metadata.
 
 // StartInteractiveTranscoding handles the transcoding process based on user selections.
@@ -51,29 +60,130 @@ var spaceSavedMutex sync.Mutex
 //define a list of servers here
 
 func StartInteractiveTranscoding(background bool) {
+	// If we're already the background process, set up logging first
+	if os.Getenv("BACKGROUND_PROCESS") == "1" {
+		logFile, err := os.OpenFile("transcode.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Printf("Error creating log file: %s\n", err)
+			return
+		}
+		defer logFile.Close()
 
-	// Query all videos from the database
-	videos, err := db.QueryAllVideos()
-	if err != nil {
-		log.Printf("Error querying videos: %s\n", err)
+		// Set up logging
+		log.SetOutput(logFile)
+		os.Stdout = logFile
+		os.Stderr = logFile
+
+		// Load the configuration
+		configFile, err := os.Open("transcode_config.json")
+		if err != nil {
+			log.Printf("Error opening config file: %s\n", err)
+			return
+		}
+		var config TranscodeConfig
+		if err := json.NewDecoder(configFile).Decode(&config); err != nil {
+			log.Printf("Error decoding config: %s\n", err)
+			return
+		}
+		configFile.Close()
+
+		// Start the actual transcoding process
+		startTranscoding(config.SelectedFiles, config.OutputResolution, config.OutputBitrate, config.MaxConcurrent, config.AutoDelete)
 		return
 	}
 
-	// Build the directory tree from the database
+	// Get user input and selections first
+	selectedFiles, outputResolution, outputBitrate, maxConcurrent, autoDelete, err := getUserSelections()
+	if err != nil {
+		fmt.Printf("Error getting user selections: %s\n", err)
+		return
+	}
+
+	// If we need to start a background process
+	if background {
+		// Save config and start background process
+		config := TranscodeConfig{
+			SelectedFiles:    selectedFiles,
+			OutputResolution: outputResolution,
+			OutputBitrate:    outputBitrate,
+			MaxConcurrent:    maxConcurrent,
+			AutoDelete:       autoDelete,
+		}
+
+		configFile, err := os.Create("transcode_config.json")
+		if err != nil {
+			fmt.Printf("Error creating config file: %s\n", err)
+			return
+		}
+		json.NewEncoder(configFile).Encode(config)
+		configFile.Close()
+
+		// Start the background process
+		cmd := exec.Command(os.Args[0], "transcode", "background")
+		cmd.Env = append(os.Environ(), "BACKGROUND_PROCESS=1")
+
+		// Set up logging for the new process
+		logFile, err := os.OpenFile("transcode.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Printf("Error creating log file: %s\n", err)
+			return
+		}
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+
+		if err := cmd.Start(); err != nil {
+			fmt.Printf("Error starting background process: %s\n", err)
+			return
+		}
+
+		fmt.Println("Transcoding process started in background. Check transcode.log for progress.")
+		return
+	}
+
+	// Start the actual transcoding process in the foreground
+	startTranscoding(selectedFiles, outputResolution, outputBitrate, maxConcurrent, autoDelete)
+}
+
+func startTranscoding(selectedFiles []datatypes.VideoObject, outputResolution string, outputBitrate int, maxConcurrent int, autoDelete bool) {
+	// Start progress display
+	go DisplayProgress(false)
+
+	// Start transcoding
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxConcurrent)
+
+	log.Printf("Starting transcoding of %d files\n", len(selectedFiles))
+	for _, video := range selectedFiles {
+		log.Printf("Queueing %s for transcoding\n", video.FullFilePath)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(video datatypes.VideoObject) {
+			defer wg.Done()
+			TranscodeAndRenameVideo(video, outputResolution, outputBitrate, autoDelete)
+			<-sem
+		}(video)
+	}
+
+	wg.Wait()
+	log.Println("All selected videos have been transcoded.")
+	os.Remove("transcode_config.json")
+}
+
+// Helper function to get user selections
+func getUserSelections() ([]datatypes.VideoObject, string, int, int, bool, error) {
 	directoryTree, err := db.BuildDirectoryTree()
 	if err != nil {
-		fmt.Printf("Error building directory tree: %s\n", err)
-		return
+		return nil, "", 0, 0, false, fmt.Errorf("error building directory tree: %w", err)
 	}
-	fmt.Printf("Starting from base directory: %s\n", directoryTree.Path)
 
-	// Ask user for output resolution, bitrate, and auto-delete preference
+	// Get user input
 	var resolution string
 	var maxConcurrent int
 	var outputResolution string
 	var outputBitrate int
 	var autoDelete bool
 	var minSize float64
+
 	fmt.Print("Enter desired input resolution (e.g., 720p,1080p,4k): ")
 	fmt.Scanln(&resolution)
 	fmt.Print("Enter desired minimum filesize for transcoding: ")
@@ -87,69 +197,24 @@ func StartInteractiveTranscoding(background bool) {
 	fmt.Println("Auto delete original files after transcoding? (true/false)")
 	fmt.Scanln(&autoDelete)
 
-	// Create a filter function for eligible files
+	// Create filter function
 	fileFilter := func(video datatypes.VideoObject) bool {
 		return float64(video.Size)/(1024*1024*1024) >= minSize && shouldTranscode(video.Width, video.Height, resolution)
 	}
 
-	// Navigate the directory tree and select files for transcoding
+	// Get directory selection
 	selectedNode, recursive := displayDirectoryAndGetSelection(directoryTree)
 	if selectedNode == nil {
-		return
+		return nil, "", 0, 0, false, fmt.Errorf("no directory selected")
 	}
+
 	selectedFiles := selectedNode.FilterFiles(fileFilter, recursive)
-
 	if len(selectedFiles) == 0 {
-		fmt.Println("No files found matching the criteria")
-		return
+		return nil, "", 0, 0, false, fmt.Errorf("no files found matching criteria")
 	}
+
 	fmt.Printf("Found %d files to transcode\n", len(selectedFiles))
-
-	if background {
-		// Create a log file for output
-		logFile, err := os.OpenFile("transcode.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			fmt.Printf("Error creating log file: %s\n", err)
-			return
-		}
-		defer logFile.Close()
-
-		// Redirect stdout and stderr to the log file
-		log.SetOutput(logFile)
-		os.Stdout = logFile
-		os.Stderr = logFile
-
-		// Detach from the terminal
-		if os.Getppid() != 1 {
-			args := append([]string{os.Args[0]}, os.Args[1:]...)
-			cmd := exec.Command("/usr/bin/nohup", args...)
-			cmd.Start()
-			fmt.Println("Transcoding process started in background. Check transcode.log for progress.")
-			os.Exit(0)
-		}
-	}
-
-	// Start progress display
-	go DisplayProgress(background)
-
-	// Transcoding logic
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, maxConcurrent)
-
-	for _, video := range videos {
-		if containsVideo(selectedFiles, video) && fileFilter(video) {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(video datatypes.VideoObject) {
-				defer wg.Done()
-				TranscodeAndRenameVideo(video, outputResolution, outputBitrate, autoDelete)
-				<-sem
-			}(video)
-		}
-	}
-
-	wg.Wait()
-	fmt.Println("All selected videos have been transcoded.")
+	return selectedFiles, outputResolution, outputBitrate, maxConcurrent, autoDelete, nil
 }
 
 func FindCommonBaseDir(videos datatypes.VideoObjects) string {
@@ -223,17 +288,22 @@ func shouldTranscode(width, height int, resolution string) bool {
 }
 
 func TranscodeAndRenameVideo(video datatypes.VideoObject, resolution string, bitrate int, autoDelete bool) {
+	// Add logging at the start
+	log.Printf("Starting transcode of %s\n", video.FullFilePath)
+
 	newName := generateNewName(video.Name)
 	outputPath := filepath.Join(video.Location, newName)
 
 	// Get the original file size
 	originalSize, err := getFileSize(video.FullFilePath)
 	if err != nil {
-		message := fmt.Sprintf("Error getting file size for %s: %s", video.FullFilePath, err)
-		fmt.Println(message)
-		utils.SendTelegramMessage(message)
+		log.Printf("Error getting file size for %s: %s\n", video.FullFilePath, err)
+		utils.SendTelegramMessage(fmt.Sprintf("Error getting file size: %s", err))
 		return
 	}
+
+	// Log the FFmpeg command
+	log.Printf("Transcoding %s to %s\n", video.FullFilePath, outputPath)
 
 	// Determine the encoding method based on hardware support
 	var encoder string
@@ -304,9 +374,8 @@ func TranscodeAndRenameVideo(video datatypes.VideoObject, resolution string, bit
 
 	// Wait for FFmpeg to finish
 	if err := cmd.Wait(); err != nil {
-		message := fmt.Sprintf("Error during transcoding: %s", err)
-		fmt.Println(message)
-		utils.SendTelegramMessage(message)
+		log.Printf("Error during transcoding: %s\n", err)
+		utils.SendTelegramMessage(fmt.Sprintf("Error during transcoding: %s", err))
 		return
 	}
 	timeTaken := time.Since(timer)
@@ -368,6 +437,9 @@ func TranscodeAndRenameVideo(video datatypes.VideoObject, resolution string, bit
 	completionMessage := fmt.Sprintf("Transcoding completed: %s -> %s\nSpace saved for this file: %.2f GB",
 		video.FullFilePath, outputPath, float64(spaceSaved)/(1024*1024*1024), "Total space saved so far: %.2f GB", float64(totalSpaceSaved)/(1024*1024*1024))
 	utils.SendTelegramMessage(completionMessage)
+
+	// Log completion
+	log.Printf("Successfully transcoded %s\n", video.FullFilePath)
 }
 
 func detectHardware() string {
