@@ -102,16 +102,10 @@ func startCallbackServer(serverSemaphores map[string]chan struct{}, numVids *int
 func StartAPITranscoding() {
 	Servers := Servers{
 		servers: []Server{
-			{name: "Server1", addr: "", concurrent: 2},
-			{name: "Server2", addr: "", concurrent: 3},
-			{name: "Server3", addr: "", concurrent: 3},
+			{name: "Server1", addr: "server1_address", concurrent: 2},
+			{name: "Server2", addr: "server2_address", concurrent: 3},
+			{name: "Server3", addr: "server3_address", concurrent: 3},
 		},
-	}
-	// Query all videos from the database
-	videos, err := db.QueryAllVideos()
-	if err != nil {
-		fmt.Printf("Error querying videos: %s\n", err)
-		return
 	}
 
 	// Build the directory tree from the database
@@ -164,35 +158,33 @@ func StartAPITranscoding() {
 	}
 
 	// Start the callback server
-	numVids := len(videos)
+	numVids := len(selectedFiles)
 	startCallbackServer(serverSemaphores, &numVids)
 
 	var wg sync.WaitGroup
-
 	utils.SendTelegramMessage(fmt.Sprintf("Starting transcoding of %d videos", numVids))
 
-	for _, video := range videos {
-		if containsVideo(selectedFiles, video) && fileFilter(video) {
-			// Find an available server
-			for _, server := range Servers.servers {
-				select {
-				case <-serverSemaphores[server.name]: // Wait for server to become available
-					wg.Add(1)
-					go func(server Server, video datatypes.VideoObject) {
-						defer wg.Done()
+	serverIndex := 0
+	for _, video := range selectedFiles {
+		// Find an available server using round-robin
+		server := Servers.servers[serverIndex]
+		serverIndex = (serverIndex + 1) % len(Servers.servers)
 
-						err := sendToTranscodingServer(server, video, outputResolution, outputBitrate, autoDelete)
-						if err != nil {
-							fmt.Printf("Error transcoding video on server %s: %v\n", server.name, err)
-							serverSemaphores[server.name] <- struct{}{} // Retry semaphore release on error
-						}
-					}(server, video)
-					break
-				default:
-					// All servers at capacity; wait for callback
-					continue
+		select {
+		case <-serverSemaphores[server.name]: // Wait for server to become available
+			wg.Add(1)
+			go func(server Server, video datatypes.VideoObject) {
+				defer wg.Done()
+
+				err := sendToTranscodingServer(server, video, outputResolution, outputBitrate, autoDelete)
+				if err != nil {
+					fmt.Printf("Error transcoding video on server %s: %v\n", server.name, err)
+					serverSemaphores[server.name] <- struct{}{} // Retry semaphore release on error
 				}
-			}
+			}(server, video)
+		default:
+			// All servers at capacity; wait for callback
+			continue
 		}
 	}
 
