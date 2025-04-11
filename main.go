@@ -57,6 +57,14 @@ func main() {
 	case "clean":
 		db.CleanDatabase()
 
+	case "clean-transcoded":
+		count, err := db.CleanTranscodedEntries()
+		if err != nil {
+			fmt.Printf("Error cleaning transcoded entries: %s\n", err)
+		} else {
+			fmt.Printf("Successfully removed %d transcoded file entries from the database.\n", count)
+		}
+
 	case "del-og":
 		renamedFilesJSON := "renamed_files.json"
 		err := deleter.DeleteOriginalFiles(renamedFilesJSON)
@@ -67,7 +75,7 @@ func main() {
 		}
 
 	default:
-		fmt.Println("Unknown command. Use 'scan', 'analyse', 'transcode', or 'del-og'.")
+		fmt.Println("Unknown command. Use 'scan', 'analyse', 'transcode', 'clean', 'clean-transcoded', or 'del-og'.")
 	}
 
 }

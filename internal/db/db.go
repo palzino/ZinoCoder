@@ -346,3 +346,51 @@ func IsInSelectedDirectory(location string, selectedDirs []string, recursive boo
 	}
 	return false
 }
+
+func CleanTranscodedEntries() (int, error) {
+	// Get all transcoded videos
+	query := `SELECT OriginalVideo FROM transcodes`
+	rows, err := DB.Query(query)
+	if err != nil {
+		return 0, fmt.Errorf("error querying transcodes: %w", err)
+	}
+	defer rows.Close()
+
+	// Collect all original video paths
+	originalPaths := []string{}
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return 0, fmt.Errorf("error scanning transcode row: %w", err)
+		}
+		originalPaths = append(originalPaths, path)
+	}
+
+	// Remove each original video from the database
+	removedCount := 0
+	for _, path := range originalPaths {
+		// Check if the file still exists in the files table
+		queryCheck := `SELECT COUNT(*) FROM files WHERE full_file_path = ?`
+		var count int
+		err := DB.QueryRow(queryCheck, path).Scan(&count)
+		if err != nil {
+			fmt.Printf("Error checking if file exists in database: %s\n", err)
+			continue
+		}
+
+		if count > 0 {
+			// Delete the file from the database
+			deleteQuery := `DELETE FROM files WHERE full_file_path = ?`
+			result, err := DB.Exec(deleteQuery, path)
+			if err != nil {
+				fmt.Printf("Error removing transcoded file from database: %s\n", err)
+				continue
+			}
+
+			rowsAffected, _ := result.RowsAffected()
+			removedCount += int(rowsAffected)
+		}
+	}
+
+	return removedCount, nil
+}

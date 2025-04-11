@@ -493,8 +493,8 @@ func TranscodeAndRenameVideo(video datatypes.VideoObject, resolution string, bit
 		}
 		fmt.Println("file has been deleted: ", video.FullFilePath)
 	}
-	completionMessage := fmt.Sprintf("Transcoding completed: %s -> %s\nSpace saved for this file: %.2f GB",
-		video.FullFilePath, outputPath, float64(spaceSaved)/(1024*1024*1024), "Total space saved so far: %.2f GB", float64(totalSpaceSaved)/(1024*1024*1024))
+	completionMessage := fmt.Sprintf("Transcoding completed: %s -> %s\nSpace saved for this file: %.2f GB\nTotal space saved so far: %.2f GB",
+		video.FullFilePath, outputPath, float64(spaceSaved)/(1024*1024*1024), float64(totalSpaceSaved)/(1024*1024*1024))
 	utils.SendTelegramMessage(completionMessage)
 
 	// Log completion
